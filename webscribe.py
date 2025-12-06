@@ -2,6 +2,7 @@
 WebScribe - Webページのすべての要素を取得して保存するツール
 """
 import json
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,13 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+try:
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
+    WEBDRIVER_MANAGER_AVAILABLE = True
+except ImportError:
+    WEBDRIVER_MANAGER_AVAILABLE = False
 
 
 class WebScribe:
@@ -41,11 +49,26 @@ class WebScribe:
         options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         
         try:
-            self.driver = webdriver.Chrome(options=options)
+            sys.stdout.flush()
+            print("ChromeDriverを初期化中...")
+            sys.stdout.flush()
+            
+            if WEBDRIVER_MANAGER_AVAILABLE:
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                self.driver = webdriver.Chrome(options=options)
+            
             self.driver.implicitly_wait(self.wait_time)
+            print("ChromeDriverの初期化が完了しました")
+            sys.stdout.flush()
         except Exception as e:
-            print(f"Chromeドライバーの初期化に失敗しました: {e}")
-            print("ChromeDriverがインストールされているか確認してください。")
+            print(f"Chromeドライバーの初期化に失敗しました: {e}", file=sys.stderr)
+            sys.stderr.flush()
+            if not WEBDRIVER_MANAGER_AVAILABLE:
+                print("webdriver-managerをインストールすると、ChromeDriverが自動的に管理されます。", file=sys.stderr)
+                print("pip install webdriver-manager", file=sys.stderr)
+            sys.stderr.flush()
             raise
     
     def _get_element_info(self, element: WebElement, index: int = 0) -> Dict[str, Any]:
@@ -226,6 +249,7 @@ class WebScribe:
             ページ情報と要素データを含む辞書
         """
         print(f"ページにアクセス中: {url}")
+        sys.stdout.flush()
         self.driver.get(url)
         
         if wait_for_load:
@@ -238,6 +262,7 @@ class WebScribe:
                 time.sleep(2)
             except TimeoutException:
                 print("警告: ページの読み込みがタイムアウトしました")
+                sys.stdout.flush()
         
         # ページ情報を取得
         page_info = {
@@ -251,6 +276,7 @@ class WebScribe:
         }
         
         print("要素を収集中...")
+        sys.stdout.flush()
         elements = self._collect_all_elements()
         
         result = {
@@ -260,6 +286,7 @@ class WebScribe:
         }
         
         print(f"合計 {len(elements)} 個の要素を収集しました")
+        sys.stdout.flush()
         return result
     
     def save_to_json(self, data: Dict[str, Any], output_path: str):
@@ -277,6 +304,7 @@ class WebScribe:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
         print(f"データを保存しました: {output_path}")
+        sys.stdout.flush()
     
     def close(self):
         """ブラウザを閉じる"""
@@ -305,16 +333,25 @@ def main():
     args = parser.parse_args()
     
     try:
+        print("=" * 50)
+        print("WebScribe - Webページ要素取得ツール")
+        print("=" * 50)
+        sys.stdout.flush()
+        
         with WebScribe(headless=args.headless, wait_time=args.wait) as scribe:
             data = scribe.scrape_page(args.url)
             scribe.save_to_json(data, args.output)
-            print("完了しました！")
+            print("\n完了しました！")
+            print(f"出力ファイル: {args.output}")
+            sys.stdout.flush()
     except KeyboardInterrupt:
         print("\n中断されました")
+        sys.stdout.flush()
     except Exception as e:
-        print(f"エラーが発生しました: {e}")
+        print(f"\nエラーが発生しました: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
+        sys.stderr.flush()
 
 
 if __name__ == '__main__':
