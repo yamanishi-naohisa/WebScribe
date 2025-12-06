@@ -1,0 +1,322 @@
+"""
+WebScribe - Webページのすべての要素を取得して保存するツール
+"""
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+
+class WebScribe:
+    """Webページの要素を取得して保存するクラス"""
+    
+    def __init__(self, headless: bool = False, wait_time: int = 10):
+        """
+        初期化
+        
+        Args:
+            headless: ヘッドレスモードで実行するかどうか
+            wait_time: ページ読み込み待機時間（秒）
+        """
+        self.wait_time = wait_time
+        self.driver = None
+        self._setup_driver(headless)
+    
+    def _setup_driver(self, headless: bool):
+        """Seleniumドライバーをセットアップ"""
+        options = webdriver.ChromeOptions()
+        if headless:
+            options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        
+        try:
+            self.driver = webdriver.Chrome(options=options)
+            self.driver.implicitly_wait(self.wait_time)
+        except Exception as e:
+            print(f"Chromeドライバーの初期化に失敗しました: {e}")
+            print("ChromeDriverがインストールされているか確認してください。")
+            raise
+    
+    def _get_element_info(self, element: WebElement, index: int = 0) -> Dict[str, Any]:
+        """
+        Web要素から情報を抽出
+        
+        Args:
+            element: SeleniumのWebElementオブジェクト
+            index: 要素のインデックス
+            
+        Returns:
+            要素情報の辞書
+        """
+        try:
+            info = {
+                'index': index,
+                'tag_name': element.tag_name,
+                'text': element.text.strip() if element.text else '',
+                'attributes': {},
+                'location': {},
+                'size': {},
+                'is_displayed': element.is_displayed(),
+                'is_enabled': element.is_enabled(),
+                'children_count': 0,
+                'xpath': self._get_xpath(element),
+                'css_selector': self._get_css_selector(element)
+            }
+            
+            # 属性を取得
+            try:
+                attributes = self.driver.execute_script(
+                    'var items = {}; '
+                    'for (index = 0; index < arguments[0].attributes.length; ++index) { '
+                    '  items[arguments[0].attributes[index].name] = arguments[0].attributes[index].value '
+                    '}; '
+                    'return items;',
+                    element
+                )
+                info['attributes'] = attributes
+            except Exception as e:
+                print(f"属性の取得に失敗しました: {e}")
+            
+            # 位置情報を取得
+            try:
+                location = element.location
+                info['location'] = {'x': location['x'], 'y': location['y']}
+            except Exception:
+                pass
+            
+            # サイズ情報を取得
+            try:
+                size = element.size
+                info['size'] = {'width': size['width'], 'height': size['height']}
+            except Exception:
+                pass
+            
+            return info
+        except Exception as e:
+            print(f"要素情報の取得中にエラーが発生しました: {e}")
+            return {'index': index, 'error': str(e)}
+    
+    def _get_xpath(self, element: WebElement) -> str:
+        """要素のXPathを取得"""
+        try:
+            return self.driver.execute_script(
+                'function getElementXPath(element) {'
+                '  if (element.id !== "") {'
+                '    return "//*[@id=\'" + element.id + "\']";'
+                '  }'
+                '  if (element === document.body) {'
+                '    return "/html/body";'
+                '  }'
+                '  var ix = 0;'
+                '  var siblings = element.parentNode.childNodes;'
+                '  for (var i = 0; i < siblings.length; i++) {'
+                '    var sibling = siblings[i];'
+                '    if (sibling === element) {'
+                '      return getElementXPath(element.parentNode) + "/" + element.tagName.toLowerCase() + "[" + (ix + 1) + "]";'
+                '    }'
+                '    if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {'
+                '      ix++;'
+                '    }'
+                '  }'
+                '}'
+                'return getElementXPath(arguments[0]);',
+                element
+            )
+        except Exception:
+            return ''
+    
+    def _get_css_selector(self, element: WebElement) -> str:
+        """要素のCSSセレクタを取得"""
+        try:
+            return self.driver.execute_script(
+                'function getElementCSSSelector(element) {'
+                '  if (element.id) {'
+                '    return "#" + element.id;'
+                '  }'
+                '  var path = [];'
+                '  while (element && element.nodeType === Node.ELEMENT_NODE) {'
+                '    var selector = element.nodeName.toLowerCase();'
+                '    if (element.className) {'
+                '      selector += "." + element.className.split(" ").join(".");'
+                '    }'
+                '    path.unshift(selector);'
+                '    element = element.parentNode;'
+                '  }'
+                '  return path.join(" > ");'
+                '}'
+                'return getElementCSSSelector(arguments[0]);',
+                element
+            )
+        except Exception:
+            return ''
+    
+    def _collect_all_elements(self, parent: Optional[WebElement] = None) -> List[Dict[str, Any]]:
+        """
+        すべての表示されている要素を再帰的に収集
+        
+        Args:
+            parent: 親要素（Noneの場合はbody要素）
+            
+        Returns:
+            要素情報のリスト
+        """
+        elements_data = []
+        index = 0
+        
+        try:
+            if parent is None:
+                # body要素から開始
+                try:
+                    body = self.driver.find_element(By.TAG_NAME, "body")
+                except NoSuchElementException:
+                    body = self.driver.find_element(By.XPATH, "//body")
+                elements = [body]
+            else:
+                try:
+                    elements = parent.find_elements(By.XPATH, "./*")
+                except Exception:
+                    elements = []
+            
+            for element in elements:
+                try:
+                    # 表示されている要素のみを収集
+                    if element.is_displayed():
+                        element_info = self._get_element_info(element, index)
+                        index += 1
+                        
+                        # 子要素を再帰的に収集
+                        try:
+                            children = self._collect_all_elements(element)
+                            element_info['children'] = children
+                            element_info['children_count'] = len(children)
+                        except Exception:
+                            element_info['children'] = []
+                            element_info['children_count'] = 0
+                        
+                        elements_data.append(element_info)
+                except Exception as e:
+                    # 要素が無効になった場合はスキップ
+                    continue
+            
+        except Exception as e:
+            print(f"要素の収集中にエラーが発生しました: {e}")
+        
+        return elements_data
+    
+    def scrape_page(self, url: str, wait_for_load: bool = True) -> Dict[str, Any]:
+        """
+        Webページをスクレイピングして要素を取得
+        
+        Args:
+            url: スクレイピングするURL
+            wait_for_load: ページの読み込みを待つかどうか
+            
+        Returns:
+            ページ情報と要素データを含む辞書
+        """
+        print(f"ページにアクセス中: {url}")
+        self.driver.get(url)
+        
+        if wait_for_load:
+            # ページが完全に読み込まれるまで待機
+            try:
+                WebDriverWait(self.driver, self.wait_time).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                # 追加の読み込み時間
+                time.sleep(2)
+            except TimeoutException:
+                print("警告: ページの読み込みがタイムアウトしました")
+        
+        # ページ情報を取得
+        page_info = {
+            'url': self.driver.current_url,
+            'title': self.driver.title,
+            'timestamp': datetime.now().isoformat(),
+            'viewport_size': {
+                'width': self.driver.get_window_size()['width'],
+                'height': self.driver.get_window_size()['height']
+            }
+        }
+        
+        print("要素を収集中...")
+        elements = self._collect_all_elements()
+        
+        result = {
+            'page_info': page_info,
+            'elements': elements,
+            'total_elements': len(elements)
+        }
+        
+        print(f"合計 {len(elements)} 個の要素を収集しました")
+        return result
+    
+    def save_to_json(self, data: Dict[str, Any], output_path: str):
+        """
+        データをJSONファイルに保存
+        
+        Args:
+            data: 保存するデータ
+            output_path: 出力ファイルパス
+        """
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        print(f"データを保存しました: {output_path}")
+    
+    def close(self):
+        """ブラウザを閉じる"""
+        if self.driver:
+            self.driver.quit()
+    
+    def __enter__(self):
+        """コンテキストマネージャー用"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """コンテキストマネージャー用"""
+        self.close()
+
+
+def main():
+    """メイン関数 - 使用例"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Webページのすべての要素を取得して保存します')
+    parser.add_argument('url', help='スクレイピングするURL')
+    parser.add_argument('-o', '--output', default='output.json', help='出力ファイルパス（デフォルト: output.json）')
+    parser.add_argument('--headless', action='store_true', help='ヘッドレスモードで実行')
+    parser.add_argument('--wait', type=int, default=10, help='ページ読み込み待機時間（秒、デフォルト: 10）')
+    
+    args = parser.parse_args()
+    
+    try:
+        with WebScribe(headless=args.headless, wait_time=args.wait) as scribe:
+            data = scribe.scrape_page(args.url)
+            scribe.save_to_json(data, args.output)
+            print("完了しました！")
+    except KeyboardInterrupt:
+        print("\n中断されました")
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == '__main__':
+    main()
+
