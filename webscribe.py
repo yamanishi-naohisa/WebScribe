@@ -27,16 +27,18 @@ except ImportError:
 class WebScribe:
     """Webページの要素を取得して保存するクラス"""
     
-    def __init__(self, headless: bool = False, wait_time: int = 10):
+    def __init__(self, headless: bool = False, wait_time: int = 10, progress_callback=None):
         """
         初期化
         
         Args:
             headless: ヘッドレスモードで実行するかどうか
             wait_time: ページ読み込み待機時間（秒）
+            progress_callback: 進捗コールバック関数（current, total, message）を受け取る
         """
         self.wait_time = wait_time
         self.driver = None
+        self.progress_callback = progress_callback
         self._setup_driver(headless)
     
     def _setup_driver(self, headless: bool):
@@ -97,13 +99,21 @@ class WebScribe:
             sys.stderr.flush()
             raise
     
-    def _get_element_info(self, element: WebElement, index: int = 0) -> Dict[str, Any]:
+    def _get_element_info(
+        self,
+        element: WebElement,
+        index: int = 0,
+        include_xpath: bool = True,
+        include_css_selector: bool = True
+    ) -> Dict[str, Any]:
         """
         Web要素から情報を抽出
         
         Args:
             element: SeleniumのWebElementオブジェクト
             index: 要素のインデックス
+            include_xpath: XPathを取得するかどうか
+            include_css_selector: CSSセレクタを取得するかどうか
             
         Returns:
             要素情報の辞書
@@ -119,9 +129,24 @@ class WebScribe:
                 'is_displayed': element.is_displayed(),
                 'is_enabled': element.is_enabled(),
                 'children_count': 0,
-                'xpath': self._get_xpath(element),
-                'css_selector': self._get_css_selector(element)
             }
+            
+            # XPathとCSSセレクタの取得は時間がかかるため、オプション化
+            if include_xpath:
+                try:
+                    info['xpath'] = self._get_xpath(element)
+                except Exception:
+                    info['xpath'] = ''
+            else:
+                info['xpath'] = ''
+            
+            if include_css_selector:
+                try:
+                    info['css_selector'] = self._get_css_selector(element)
+                except Exception:
+                    info['css_selector'] = ''
+            else:
+                info['css_selector'] = ''
             
             # 属性を取得
             try:
@@ -210,18 +235,46 @@ class WebScribe:
         except Exception:
             return ''
     
-    def _collect_all_elements(self, parent: Optional[WebElement] = None) -> List[Dict[str, Any]]:
+    def _collect_all_elements(
+        self,
+        parent: Optional[WebElement] = None,
+        max_depth: int = 50,
+        current_depth: int = 0,
+        max_elements: int = 10000,
+        element_count: List[int] = None,
+        include_xpath: bool = True,
+        include_css_selector: bool = True
+    ) -> List[Dict[str, Any]]:
         """
         すべての表示されている要素を再帰的に収集
         
         Args:
             parent: 親要素（Noneの場合はbody要素）
+            max_depth: 最大再帰深度
+            current_depth: 現在の深度
+            max_elements: 最大要素数（制限）
+            element_count: 要素数のカウント用リスト（参照渡し）
+            include_xpath: XPathを取得するかどうか
+            include_css_selector: CSSセレクタを取得するかどうか
             
         Returns:
             要素情報のリスト
         """
+        if element_count is None:
+            element_count = [0]
+        
+        # 深度制限チェック
+        if current_depth >= max_depth:
+            return []
+        
+        # 要素数制限チェック
+        if element_count[0] >= max_elements:
+            print(f"\n警告: 要素数が上限（{max_elements}）に達しました。処理を中断します。")
+            sys.stdout.flush()
+            return []
+        
         elements_data = []
-        index = 0
+        index = element_count[0]
         
         try:
             if parent is None:
@@ -238,18 +291,48 @@ class WebScribe:
                     elements = []
             
             for element in elements:
+                # 要素数制限チェック
+                if element_count[0] >= max_elements:
+                    break
+                
                 try:
                     # 表示されている要素のみを収集
                     if element.is_displayed():
-                        element_info = self._get_element_info(element, index)
-                        index += 1
+                        # 進捗表示（コールバックがある場合は毎回、ない場合は100要素ごと）
+                        if self.progress_callback:
+                            # コールバックがある場合は、10要素ごとに更新（頻繁すぎると重くなるため）
+                            if element_count[0] % 10 == 0 or element_count[0] == 0:
+                                self.progress_callback(
+                                    current=element_count[0],
+                                    total=max_elements,
+                                    message=f"要素を収集中... {element_count[0]}個処理済み"
+                                )
+                        elif element_count[0] % 100 == 0 and element_count[0] > 0:
+                            print(f"要素を収集中... {element_count[0]}個処理済み", end='\r')
+                            sys.stdout.flush()
+                        
+                        element_info = self._get_element_info(
+                            element,
+                            element_count[0],
+                            include_xpath=include_xpath,
+                            include_css_selector=include_css_selector
+                        )
+                        element_count[0] += 1
                         
                         # 子要素を再帰的に収集
                         try:
-                            children = self._collect_all_elements(element)
+                            children = self._collect_all_elements(
+                                element,
+                                max_depth=max_depth,
+                                current_depth=current_depth + 1,
+                                max_elements=max_elements,
+                                element_count=element_count,
+                                include_xpath=include_xpath,
+                                include_css_selector=include_css_selector
+                            )
                             element_info['children'] = children
                             element_info['children_count'] = len(children)
-                        except Exception:
+                        except Exception as e:
                             element_info['children'] = []
                             element_info['children_count'] = 0
                         
@@ -259,7 +342,8 @@ class WebScribe:
                     continue
             
         except Exception as e:
-            print(f"要素の収集中にエラーが発生しました: {e}")
+            print(f"\n要素の収集中にエラーが発生しました: {e}")
+            sys.stdout.flush()
         
         return elements_data
     
@@ -480,7 +564,8 @@ class WebScribe:
         url: str,
         wait_for_load: bool = True,
         wait_javascript: bool = True,
-        login_info: Optional[Dict[str, Any]] = None
+        login_info: Optional[Dict[str, Any]] = None,
+        max_elements: int = 10000
     ) -> Dict[str, Any]:
         """
         Webページをスクレイピングして要素を取得
@@ -566,9 +651,25 @@ class WebScribe:
             }
         }
         
-        print("要素を収集中...")
+        if self.progress_callback:
+            self.progress_callback(current=0, total=max_elements, message="要素を収集中...")
+        else:
+            print("要素を収集中...")
         sys.stdout.flush()
-        elements = self._collect_all_elements()
+        
+        # 要素収集の開始時刻を記録
+        start_time = time.time()
+        
+        # 要素収集（XPathとCSSセレクタの取得は時間がかかるため、大量の要素がある場合は無効化を推奨）
+        # TimeTreeのような複雑なページでは、XPath/CSSセレクタの取得を無効化すると大幅に高速化
+        elements = self._collect_all_elements(
+            max_depth=50,
+            max_elements=max_elements,
+            include_xpath=False,  # 高速化のためデフォルトで無効化（必要に応じてTrueに変更可能）
+            include_css_selector=False  # 高速化のためデフォルトで無効化（必要に応じてTrueに変更可能）
+        )
+        
+        elapsed_time = time.time() - start_time
         
         result = {
             'page_info': page_info,
@@ -576,7 +677,7 @@ class WebScribe:
             'total_elements': len(elements)
         }
         
-        print(f"合計 {len(elements)} 個の要素を収集しました")
+        print(f"\n合計 {len(elements)} 個の要素を収集しました（処理時間: {elapsed_time:.2f}秒）")
         sys.stdout.flush()
         return result
     

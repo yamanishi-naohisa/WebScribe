@@ -2,6 +2,7 @@
 WebScribe GUI - ダイアログでURLを指定してWeb要素を取得するGUIアプリケーション
 """
 import sys
+import json
 import threading
 import io
 from contextlib import redirect_stdout, redirect_stderr
@@ -38,8 +39,16 @@ class WebScribeGUI:
         self.password_selector_var = StringVar(value="")
         self.submit_selector_var = StringVar(value="")
         self.is_running = False
+        self.current_element_count = 0
+        self.max_elements = 10000
+        
+        # 設定ファイルのパス
+        self.settings_file = Path(__file__).parent / "webscribe_settings.json"
         
         self._create_widgets()
+        
+        # 起動時に設定を読み込む
+        self.load_settings()
         
     def _create_widgets(self):
         """ウィジェットを作成"""
@@ -172,13 +181,72 @@ class WebScribeGUI:
         )
         self.stop_button.pack(side='left', padx=(10, 0))
         
+        # 設定ボタン
+        settings_frame = Frame(button_frame)
+        settings_frame.pack(side='right')
+        
+        save_settings_button = Button(
+            settings_frame,
+            text="設定を保存",
+            command=self.save_settings,
+            font=('Arial', 9),
+            bg='#2196F3',
+            fg='white',
+            padx=10,
+            pady=5,
+            cursor='hand2'
+        )
+        save_settings_button.pack(side='left', padx=(10, 0))
+        
+        load_settings_button = Button(
+            settings_frame,
+            text="設定を読み込み",
+            command=lambda: self.load_settings(show_message=True),
+            font=('Arial', 9),
+            bg='#FF9800',
+            fg='white',
+            padx=10,
+            pady=5,
+            cursor='hand2'
+        )
+        load_settings_button.pack(side='left', padx=(5, 0))
+        
+        # 進捗表示セクション
+        progress_frame = Frame(main_frame)
+        progress_frame.pack(fill='x', pady=(0, 10))
+        
+        Label(progress_frame, text="進捗状況:", font=('Arial', 10, 'bold')).pack(anchor='w', pady=(0, 5))
+        
         # 進捗バー
         self.progress = ttk.Progressbar(
-            main_frame,
-            mode='indeterminate',
-            length=400
+            progress_frame,
+            mode='determinate',
+            length=400,
+            maximum=100
         )
-        self.progress.pack(fill='x', pady=(0, 10))
+        self.progress.pack(fill='x', pady=(0, 5))
+        
+        # 進捗情報表示（要素数、メッセージなど）
+        progress_info_frame = Frame(progress_frame)
+        progress_info_frame.pack(fill='x')
+        
+        self.progress_label = Label(
+            progress_info_frame,
+            text="待機中...",
+            font=('Arial', 9),
+            fg='#666666',
+            anchor='w'
+        )
+        self.progress_label.pack(side='left', fill='x', expand=True)
+        
+        self.element_count_label = Label(
+            progress_info_frame,
+            text="",
+            font=('Arial', 9, 'bold'),
+            fg='#2196F3',
+            anchor='e'
+        )
+        self.element_count_label.pack(side='right')
         
         # ログ表示エリア
         log_label_frame = Frame(main_frame)
@@ -210,6 +278,8 @@ class WebScribeGUI:
         
         # 初期メッセージ
         self.log("WebScribe GUIを起動しました。")
+        if self.settings_file.exists():
+            self.log("前回の設定を読み込みました。")
         self.log("URLを入力して「実行」ボタンをクリックしてください。\n")
         
     def _toggle_login_fields(self):
@@ -218,6 +288,25 @@ class WebScribeGUI:
             self.login_details_frame.pack(fill='x', pady=(5, 0))
         else:
             self.login_details_frame.pack_forget()
+    
+    def update_progress(self, current: int, total: int, message: str):
+        """進捗情報を更新"""
+        self.current_element_count = current
+        self.max_elements = total
+        
+        # 進捗率を計算
+        if total > 0:
+            progress_percent = min(100, int((current / total) * 100))
+            self.progress['value'] = progress_percent
+        else:
+            self.progress['value'] = 0
+        
+        # ラベルを更新
+        self.progress_label.config(text=message)
+        self.element_count_label.config(text=f"{current} / {total} 要素" if total > 0 else f"{current} 要素")
+        
+        # GUIを更新
+        self.root.update_idletasks()
         
     def log(self, message: str):
         """ログメッセージを表示"""
@@ -242,6 +331,82 @@ class WebScribeGUI:
         )
         if filename:
             self.output_var.set(filename)
+    
+    def save_settings(self):
+        """現在の設定をファイルに保存"""
+        try:
+            settings = {
+                'url': self.url_var.get(),
+                'output_file': self.output_var.get(),
+                'headless': self.headless_var.get(),
+                'wait_time': self.wait_time_var.get(),
+                'need_login': self.need_login_var.get(),
+                'login_url': self.login_url_var.get(),
+                'username': self.username_var.get(),
+                'password': self.password_var.get(),  # 注意: 平文で保存されます
+                'username_selector': self.username_selector_var.get(),
+                'password_selector': self.password_selector_var.get(),
+                'submit_selector': self.submit_selector_var.get(),
+            }
+            
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+            
+            messagebox.showinfo("成功", f"設定を保存しました。\n{self.settings_file}")
+            self.log(f"設定を保存しました: {self.settings_file}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"設定の保存に失敗しました:\n{e}")
+            self.log(f"設定の保存エラー: {e}")
+    
+    def load_settings(self, show_message: bool = False):
+        """保存された設定をファイルから読み込み
+        
+        Args:
+            show_message: メッセージを表示するかどうか（デフォルト: False）
+        """
+        try:
+            if not self.settings_file.exists():
+                if show_message:
+                    messagebox.showinfo("情報", "設定ファイルが見つかりません。")
+                return  # 設定ファイルが存在しない場合は何もしない
+            
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            # 設定を復元
+            if 'url' in settings:
+                self.url_var.set(settings.get('url', ''))
+            if 'output_file' in settings:
+                self.output_var.set(settings.get('output_file', 'output.json'))
+            if 'headless' in settings:
+                self.headless_var.set(settings.get('headless', True))
+            if 'wait_time' in settings:
+                self.wait_time_var.set(str(settings.get('wait_time', '10')))
+            if 'need_login' in settings:
+                need_login = settings.get('need_login', False)
+                self.need_login_var.set(need_login)
+                if need_login:
+                    self._toggle_login_fields()
+            if 'login_url' in settings:
+                self.login_url_var.set(settings.get('login_url', ''))
+            if 'username' in settings:
+                self.username_var.set(settings.get('username', ''))
+            if 'password' in settings:
+                self.password_var.set(settings.get('password', ''))
+            if 'username_selector' in settings:
+                self.username_selector_var.set(settings.get('username_selector', ''))
+            if 'password_selector' in settings:
+                self.password_selector_var.set(settings.get('password_selector', ''))
+            if 'submit_selector' in settings:
+                self.submit_selector_var.set(settings.get('submit_selector', ''))
+            
+            if show_message:
+                messagebox.showinfo("成功", "設定を読み込みました。")
+            self.log("設定を読み込みました")
+        except Exception as e:
+            if show_message:
+                messagebox.showerror("エラー", f"設定の読み込みに失敗しました:\n{e}")
+            # 起動時の自動読み込み時はエラーをログに記録しない
             
     def validate_inputs(self) -> bool:
         """入力値の検証"""
@@ -277,7 +442,10 @@ class WebScribeGUI:
         self.is_running = True
         self.execute_button.config(state='disabled')
         self.stop_button.config(state='normal')
-        self.progress.start(10)
+        self.progress['value'] = 0
+        self.progress_label.config(text="処理を開始しています...")
+        self.element_count_label.config(text="")
+        self.current_element_count = 0
         
         # 別スレッドで実行
         thread = threading.Thread(target=self._run_scraping, daemon=True)
@@ -336,10 +504,14 @@ class WebScribeGUI:
             
             log_stream = LogStream(self.log)
             
+            # 進捗コールバック関数を定義
+            def progress_callback(current, total, message):
+                self.root.after(0, lambda: self.update_progress(current, total, message))
+            
             # WebScribeのインスタンスを作成
             self.log("ChromeDriverを初期化中...")
             with redirect_stdout(log_stream), redirect_stderr(log_stream):
-                scribe = WebScribe(headless=headless, wait_time=wait_time)
+                scribe = WebScribe(headless=headless, wait_time=wait_time, progress_callback=progress_callback)
             log_stream.flush()
             
             if not self.is_running:
@@ -381,7 +553,7 @@ class WebScribeGUI:
             # ページをスクレイピング
             self.log(f"ページにアクセス中: {url}")
             with redirect_stdout(log_stream), redirect_stderr(log_stream):
-                data = scribe.scrape_page(url, login_info=login_info)
+                data = scribe.scrape_page(url, login_info=login_info, max_elements=self.max_elements)
             log_stream.flush()
             
             if not self.is_running:
@@ -442,7 +614,13 @@ class WebScribeGUI:
         self.is_running = False
         self.execute_button.config(state='normal')
         self.stop_button.config(state='disabled')
-        self.progress.stop()
+        self.progress['value'] = 100
+        if self.max_elements > 0:
+            self.progress_label.config(text="完了")
+            self.element_count_label.config(text=f"{self.current_element_count} / {self.max_elements} 要素")
+        else:
+            self.progress_label.config(text="完了")
+            self.element_count_label.config(text="")
 
 
 def main():
