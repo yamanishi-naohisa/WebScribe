@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -300,7 +301,187 @@ class WebScribe:
         except Exception as e:
             print(f"スクロール処理中にエラー: {e}")
     
-    def scrape_page(self, url: str, wait_for_load: bool = True, wait_javascript: bool = True) -> Dict[str, Any]:
+    def login(
+        self,
+        login_url: str,
+        username: str,
+        password: str,
+        username_selector: str = None,
+        password_selector: str = None,
+        submit_selector: str = None,
+        wait_after_login: int = 3
+    ) -> bool:
+        """
+        ログイン処理を実行
+        
+        Args:
+            login_url: ログインページのURL
+            username: ユーザー名
+            password: パスワード
+            username_selector: ユーザー名入力フィールドのセレクタ（XPathまたはCSSセレクタ）
+            password_selector: パスワード入力フィールドのセレクタ（XPathまたはCSSセレクタ）
+            submit_selector: ログインボタンのセレクタ（XPathまたはCSSセレクタ）
+            wait_after_login: ログイン後の待機時間（秒）
+            
+        Returns:
+            ログインが成功したかどうか
+        """
+        try:
+            print(f"ログインページにアクセス中: {login_url}")
+            sys.stdout.flush()
+            self.driver.get(login_url)
+            
+            # ページの読み込みを待機
+            WebDriverWait(self.driver, self.wait_time).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            time.sleep(1)
+            
+            # セレクタが指定されていない場合は自動検出を試みる
+            if not username_selector:
+                # よくあるユーザー名フィールドのセレクタを試す
+                possible_selectors = [
+                    "input[type='email']",
+                    "input[type='text'][name*='user']",
+                    "input[type='text'][name*='login']",
+                    "input[type='text'][name*='account']",
+                    "input[name='username']",
+                    "input[id*='user']",
+                    "input[id*='login']",
+                ]
+                username_selector = self._find_element_selector(possible_selectors)
+            
+            if not password_selector:
+                # よくあるパスワードフィールドのセレクタを試す
+                possible_selectors = [
+                    "input[type='password']",
+                    "input[name='password']",
+                    "input[id*='pass']",
+                ]
+                password_selector = self._find_element_selector(possible_selectors)
+            
+            if not submit_selector:
+                # よくあるログインボタンのセレクタを試す
+                possible_selectors = [
+                    "button[type='submit']",
+                    "input[type='submit']",
+                    "button:contains('ログイン')",
+                    "button:contains('Login')",
+                    "input[value*='ログイン']",
+                    "input[value*='Login']",
+                ]
+                submit_selector = self._find_element_selector(possible_selectors)
+            
+            # ユーザー名を入力
+            if username_selector:
+                try:
+                    username_field = self._find_element(username_selector)
+                    username_field.clear()
+                    username_field.send_keys(username)
+                    print("ユーザー名を入力しました")
+                    sys.stdout.flush()
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"ユーザー名フィールドが見つかりません: {e}")
+                    sys.stderr.flush()
+                    return False
+            else:
+                print("エラー: ユーザー名フィールドのセレクタを指定してください")
+                sys.stderr.flush()
+                return False
+            
+            # パスワードを入力
+            if password_selector:
+                try:
+                    password_field = self._find_element(password_selector)
+                    password_field.clear()
+                    password_field.send_keys(password)
+                    print("パスワードを入力しました")
+                    sys.stdout.flush()
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"パスワードフィールドが見つかりません: {e}")
+                    sys.stderr.flush()
+                    return False
+            else:
+                print("エラー: パスワードフィールドのセレクタを指定してください")
+                sys.stderr.flush()
+                return False
+            
+            # ログインボタンをクリック
+            if submit_selector:
+                try:
+                    submit_button = self._find_element(submit_selector)
+                    submit_button.click()
+                    print("ログインボタンをクリックしました")
+                    sys.stdout.flush()
+                except Exception as e:
+                    print(f"ログインボタンが見つかりません: {e}")
+                    sys.stderr.flush()
+                    return False
+            else:
+                # セレクタが見つからない場合、Enterキーで送信を試みる
+                print("ログインボタンのセレクタが見つからないため、Enterキーで送信を試みます")
+                sys.stdout.flush()
+                from selenium.webdriver.common.keys import Keys
+                password_field.send_keys(Keys.RETURN)
+            
+            # ログイン後の遷移を待機
+            print(f"ログイン後の遷移を待機中...（{wait_after_login}秒）")
+            sys.stdout.flush()
+            time.sleep(wait_after_login)
+            
+            # ログインページから遷移したか確認
+            current_url = self.driver.current_url
+            if current_url != login_url and 'login' not in current_url.lower() and 'signin' not in current_url.lower():
+                print(f"ログイン成功: {current_url}")
+                sys.stdout.flush()
+                return True
+            else:
+                print(f"警告: ログインページから遷移していない可能性があります: {current_url}")
+                sys.stdout.flush()
+                # 遷移していなくても成功とする（サイトによってはリダイレクトしない場合がある）
+                return True
+                
+        except Exception as e:
+            print(f"ログイン処理中にエラーが発生しました: {e}")
+            sys.stderr.flush()
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _find_element_selector(self, selectors: List[str]) -> Optional[str]:
+        """複数のセレクタを試して、最初に見つかったものを返す"""
+        for selector in selectors:
+            try:
+                if selector.startswith('//') or selector.startswith('(//'):
+                    # XPath
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                else:
+                    # CSSセレクタ
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements and any(e.is_displayed() for e in elements):
+                    return selector
+            except Exception:
+                continue
+        return None
+    
+    def _find_element(self, selector: str):
+        """セレクタから要素を見つける（XPathまたはCSSセレクタ）"""
+        if selector.startswith('//') or selector.startswith('(//'):
+            # XPath
+            return self.driver.find_element(By.XPATH, selector)
+        else:
+            # CSSセレクタ
+            return self.driver.find_element(By.CSS_SELECTOR, selector)
+    
+    def scrape_page(
+        self,
+        url: str,
+        wait_for_load: bool = True,
+        wait_javascript: bool = True,
+        login_info: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Webページをスクレイピングして要素を取得
         
@@ -308,10 +489,46 @@ class WebScribe:
             url: スクレイピングするURL
             wait_for_load: ページの読み込みを待つかどうか
             wait_javascript: JavaScriptの実行完了を待つかどうか
+            login_info: ログイン情報（辞書形式）
+                - login_url: ログインページのURL
+                - username: ユーザー名
+                - password: パスワード
+                - username_selector: ユーザー名フィールドのセレクタ（省略可）
+                - password_selector: パスワードフィールドのセレクタ（省略可）
+                - submit_selector: ログインボタンのセレクタ（省略可）
             
         Returns:
             ページ情報と要素データを含む辞書
         """
+        # ログインが必要な場合
+        if login_info:
+            login_url = login_info.get('login_url')
+            username = login_info.get('username')
+            password = login_info.get('password')
+            username_selector = login_info.get('username_selector')
+            password_selector = login_info.get('password_selector')
+            submit_selector = login_info.get('submit_selector')
+            wait_after_login = login_info.get('wait_after_login', 3)
+            
+            if login_url and username and password:
+                print("ログイン処理を開始します...")
+                sys.stdout.flush()
+                login_success = self.login(
+                    login_url=login_url,
+                    username=username,
+                    password=password,
+                    username_selector=username_selector,
+                    password_selector=password_selector,
+                    submit_selector=submit_selector,
+                    wait_after_login=wait_after_login
+                )
+                
+                if not login_success:
+                    raise Exception("ログインに失敗しました")
+                
+                print(f"ログイン成功。目的のページにアクセス中: {url}")
+                sys.stdout.flush()
+        
         print(f"ページにアクセス中: {url}")
         sys.stdout.flush()
         self.driver.get(url)

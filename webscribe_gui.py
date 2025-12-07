@@ -30,6 +30,13 @@ class WebScribeGUI:
         self.output_var = StringVar(value="output.json")
         self.headless_var = BooleanVar(value=True)
         self.wait_time_var = StringVar(value="10")
+        self.need_login_var = BooleanVar(value=False)
+        self.login_url_var = StringVar(value="")
+        self.username_var = StringVar(value="")
+        self.password_var = StringVar(value="")
+        self.username_selector_var = StringVar(value="")
+        self.password_selector_var = StringVar(value="")
+        self.submit_selector_var = StringVar(value="")
         self.is_running = False
         
         self._create_widgets()
@@ -90,6 +97,49 @@ class WebScribeGUI:
         Label(wait_frame, text="待機時間（秒）:", font=('Arial', 9)).pack(side='left')
         wait_entry = Entry(wait_frame, textvariable=self.wait_time_var, width=10, font=('Arial', 9))
         wait_entry.pack(side='left', padx=(5, 0))
+        
+        # ログイン情報セクション
+        login_frame = Frame(main_frame)
+        login_frame.pack(fill='x', pady=(0, 10))
+        
+        login_check = Checkbutton(
+            login_frame,
+            text="ログインが必要なページ",
+            variable=self.need_login_var,
+            font=('Arial', 10, 'bold'),
+            command=self._toggle_login_fields
+        )
+        login_check.pack(anchor='w', pady=(0, 5))
+        
+        # ログイン情報の入力フィールド（初期状態では非表示）
+        self.login_details_frame = Frame(login_frame)
+        
+        Label(self.login_details_frame, text="ログインURL:", font=('Arial', 9)).pack(anchor='w')
+        Entry(self.login_details_frame, textvariable=self.login_url_var, font=('Arial', 9)).pack(fill='x', pady=(2, 5))
+        
+        login_input_frame = Frame(self.login_details_frame)
+        login_input_frame.pack(fill='x', pady=(0, 5))
+        
+        Label(login_input_frame, text="ユーザー名:", font=('Arial', 9), width=12).pack(side='left')
+        Entry(login_input_frame, textvariable=self.username_var, font=('Arial', 9)).pack(side='left', fill='x', expand=True, padx=(5, 0))
+        
+        Label(login_input_frame, text="パスワード:", font=('Arial', 9), width=12).pack(side='left', padx=(10, 0))
+        password_entry = Entry(login_input_frame, textvariable=self.password_var, font=('Arial', 9), show='*')
+        password_entry.pack(side='left', fill='x', expand=True, padx=(5, 0))
+        
+        Label(self.login_details_frame, text="セレクタ（省略可、自動検出を試みます）:", font=('Arial', 8), fg='gray').pack(anchor='w', pady=(5, 2))
+        
+        selector_frame = Frame(self.login_details_frame)
+        selector_frame.pack(fill='x')
+        
+        Label(selector_frame, text="ユーザー名:", font=('Arial', 8), width=12).pack(side='left')
+        Entry(selector_frame, textvariable=self.username_selector_var, font=('Arial', 8)).pack(side='left', fill='x', expand=True, padx=(2, 5))
+        
+        Label(selector_frame, text="パスワード:", font=('Arial', 8), width=12).pack(side='left')
+        Entry(selector_frame, textvariable=self.password_selector_var, font=('Arial', 8)).pack(side='left', fill='x', expand=True, padx=(2, 5))
+        
+        Label(self.login_details_frame, text="ログインボタン:", font=('Arial', 8), width=12).pack(anchor='w', pady=(2, 0))
+        Entry(self.login_details_frame, textvariable=self.submit_selector_var, font=('Arial', 8)).pack(fill='x', pady=(2, 0))
         
         # 実行ボタン
         button_frame = Frame(main_frame)
@@ -161,6 +211,13 @@ class WebScribeGUI:
         # 初期メッセージ
         self.log("WebScribe GUIを起動しました。")
         self.log("URLを入力して「実行」ボタンをクリックしてください。\n")
+        
+    def _toggle_login_fields(self):
+        """ログイン情報入力フィールドの表示/非表示を切り替え"""
+        if self.need_login_var.get():
+            self.login_details_frame.pack(fill='x', pady=(5, 0))
+        else:
+            self.login_details_frame.pack_forget()
         
     def log(self, message: str):
         """ログメッセージを表示"""
@@ -290,10 +347,41 @@ class WebScribeGUI:
                     scribe.close()
                 return
                 
+            # ログイン情報を準備
+            login_info = None
+            if self.need_login_var.get():
+                login_url = self.login_url_var.get().strip()
+                username = self.username_var.get().strip()
+                password = self.password_var.get().strip()
+                
+                if login_url and username and password:
+                    login_info = {
+                        'login_url': login_url,
+                        'username': username,
+                        'password': password,
+                    }
+                    
+                    # セレクタが指定されている場合は追加
+                    username_selector = self.username_selector_var.get().strip()
+                    password_selector = self.password_selector_var.get().strip()
+                    submit_selector = self.submit_selector_var.get().strip()
+                    
+                    if username_selector:
+                        login_info['username_selector'] = username_selector
+                    if password_selector:
+                        login_info['password_selector'] = password_selector
+                    if submit_selector:
+                        login_info['submit_selector'] = submit_selector
+                    
+                    self.log(f"ログイン情報が設定されています")
+                    self.log(f"ログインURL: {login_url}")
+                else:
+                    self.log("警告: ログインが必要とマークされていますが、必要な情報が不足しています")
+            
             # ページをスクレイピング
             self.log(f"ページにアクセス中: {url}")
             with redirect_stdout(log_stream), redirect_stderr(log_stream):
-                data = scribe.scrape_page(url)
+                data = scribe.scrape_page(url, login_info=login_info)
             log_stream.flush()
             
             if not self.is_running:

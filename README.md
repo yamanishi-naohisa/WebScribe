@@ -35,6 +35,9 @@ python webscribe_gui.py
 - 出力ファイルの指定（参照ボタンでファイル選択）
 - ヘッドレスモードの選択
 - 待機時間の設定
+- **ログイン機能**（ログインが必要なページに対応）
+  - ログインURL、ユーザー名、パスワードの入力
+  - セレクタの自動検出または手動指定
 - リアルタイムログ表示
 - 進捗バーの表示
 
@@ -54,7 +57,40 @@ python webscribe.py https://example.com --headless
 python webscribe.py https://example.com --wait 15
 ```
 
-### Pythonコードから使用
+### ログインが必要なページの場合
+
+#### GUI版
+1. 「ログインが必要なページ」にチェック
+2. ログインURL、ユーザー名、パスワードを入力
+3. セレクタは省略可（自動検出を試みます）
+4. 目的のページのURLを入力して実行
+
+#### Pythonコードから使用（ログイン機能付き）
+
+```python
+from webscribe import WebScribe
+
+with WebScribe(headless=False) as scribe:
+    # ログイン情報を指定
+    login_info = {
+        'login_url': 'https://example.com/login',
+        'username': 'your_username',
+        'password': 'your_password',
+        # 以下は省略可（自動検出を試みます）
+        # 'username_selector': 'input[name="username"]',
+        # 'password_selector': 'input[type="password"]',
+        # 'submit_selector': 'button[type="submit"]',
+    }
+    
+    # ログイン後に目的のページを取得
+    data = scribe.scrape_page(
+        "https://example.com/protected-page",
+        login_info=login_info
+    )
+    scribe.save_to_json(data, "output.json")
+```
+
+### Pythonコードから使用（基本）
 
 ```python
 from webscribe import WebScribe
