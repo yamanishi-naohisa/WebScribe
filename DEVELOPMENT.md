@@ -44,14 +44,26 @@ WebScribeは、Webページに表示されているすべてのWeb要素を取�
    - ヘッドレスモード対応
    - 待機時間のカスタマイズ
 
+7. **GUIアプリケーション**
+   - tkinterを使用したグラフィカルインターフェース
+   - ダイアログでURLを入力
+   - 出力ファイルの参照ボタン
+   - ヘッドレスモードのチェックボックス
+   - 待機時間の設定
+   - リアルタイムログ表示
+   - 進捗バーの表示
+   - 停止機能
+
 ### 📁 プロジェクト構造
 
 ```
 WebScribe/
-├── webscribe.py           # メインスクリプト（360行）
+├── webscribe.py           # メインスクリプト（コマンドライン版、360行）
+├── webscribe_gui.py       # GUIアプリケーション（354行）
 ├── example_usage.py       # 使用例
 ├── requirements.txt       # 依存パッケージ
 ├── .gitignore            # Git除外設定
+├── README.md             # プロジェクト説明
 ├── DEVELOPMENT.md        # 開発状況まとめ（本ファイル）
 └── test_output.json      # テスト実行結果（example.com）
 ```
@@ -61,6 +73,7 @@ WebScribe/
 - **Python 3.x**
 - **Selenium 4.15.0+**: Webブラウザの自動操作
 - **webdriver-manager 4.0.0+**: ChromeDriverの自動管理
+- **tkinter**: GUIアプリケーション（Python標準ライブラリ）
 - **Chrome Browser**: ブラウザエンジン
 
 ### 📝 実装済みのクラスとメソッド
@@ -78,6 +91,19 @@ WebScribe/
 - `close()`: ブラウザを閉じる
 - コンテキストマネージャー対応（`__enter__`, `__exit__`）
 
+#### WebScribeGUI クラス
+
+- `__init__(root)`: GUIアプリケーションの初期化
+- `_create_widgets()`: ウィジェットの作成
+- `log(message)`: ログメッセージの表示
+- `clear_log()`: ログのクリア
+- `browse_output_file()`: 出力ファイルの保存先選択
+- `validate_inputs()`: 入力値の検証
+- `start_scraping()`: スクレイピングの開始
+- `stop_scraping()`: スクレイピングの停止
+- `_run_scraping()`: スクレイピングの実行（別スレッド）
+- `_scraping_finished()`: スクレイピング終了時の処理
+
 ### 📊 テスト結果
 
 - **テストURL**: https://example.com
@@ -86,6 +112,23 @@ WebScribe/
 - **取得要素数**: 複数要素を正常に取得（test_output.jsonに保存）
 
 ### 💻 使用方法
+
+#### GUI版（推奨）
+
+ダイアログでURLを指定して簡単にWeb要素を取得できます。
+
+```bash
+python webscribe_gui.py
+```
+
+**GUI版の機能:**
+- URL入力フィールド
+- 出力ファイルの指定（参照ボタンでファイル選択）
+- ヘッドレスモードの選択
+- 待機時間の設定
+- リアルタイムログ表示
+- 進捗バーの表示
+- 停止機能
 
 #### コマンドラインから実行
 
@@ -164,7 +207,15 @@ pip install -r requirements.txt
 
 ### 📝 変更履歴
 
-#### 2025-12-06
+#### 2025-12-06 (2回目の更新)
+- GUIアプリケーションを追加（webscribe_gui.py）
+- tkinterを使用したグラフィカルインターフェースを実装
+- ダイアログでURLを指定できる機能を追加
+- リアルタイムログ表示機能を追加
+- 進捗バーの表示機能を追加
+- README.mdを追加
+
+#### 2025-12-06 (初回リリース)
 - 初回リリース
 - 基本的なWeb要素取得機能を実装
 - GitHubリポジトリにアップロード完了
