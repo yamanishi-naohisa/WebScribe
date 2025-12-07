@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from collections import defaultdict
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -24,10 +25,106 @@ except ImportError:
     WEBDRIVER_MANAGER_AVAILABLE = False
 
 
+class TimingStats:
+    """時間計測統計クラス"""
+    def __init__(self):
+        self.timings = defaultdict(list)  # 処理名 -> [時間のリスト]
+        self.element_timings = []  # 各要素の処理時間
+        self.total_start_time = None
+        self.total_end_time = None
+    
+    def start_total(self):
+        """全体の計測開始"""
+        self.total_start_time = time.time()
+    
+    def end_total(self):
+        """全体の計測終了"""
+        self.total_end_time = time.time()
+    
+    def record(self, operation_name: str, duration: float):
+        """処理時間を記録"""
+        self.timings[operation_name].append(duration)
+    
+    def record_element(self, element_index: int, tag_name: str, total_time: float, breakdown: Dict[str, float]):
+        """要素ごとの処理時間を記録"""
+        self.element_timings.append({
+            'index': element_index,
+            'tag_name': tag_name,
+            'total_time': total_time,
+            'breakdown': breakdown
+        })
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """統計サマリーを取得"""
+        summary = {}
+        
+        # 各処理の統計
+        for operation, times in self.timings.items():
+            if times:
+                summary[operation] = {
+                    'count': len(times),
+                    'total': sum(times),
+                    'average': sum(times) / len(times),
+                    'min': min(times),
+                    'max': max(times)
+                }
+        
+        # 全体の時間
+        if self.total_start_time and self.total_end_time:
+            summary['total_time'] = self.total_end_time - self.total_start_time
+        
+        # 要素ごとの統計
+        if self.element_timings:
+            element_times = [e['total_time'] for e in self.element_timings]
+            summary['elements'] = {
+                'count': len(self.element_timings),
+                'total_time': sum(element_times),
+                'average_time': sum(element_times) / len(element_times) if element_times else 0,
+                'min_time': min(element_times) if element_times else 0,
+                'max_time': max(element_times) if element_times else 0
+            }
+        
+        return summary
+    
+    def print_summary(self):
+        """統計を出力"""
+        summary = self.get_summary()
+        
+        print("\n" + "=" * 60)
+        print("処理時間統計")
+        print("=" * 60)
+        
+        if 'total_time' in summary:
+            print(f"全体処理時間: {summary['total_time']:.3f}秒")
+        
+        if 'elements' in summary:
+            elem = summary['elements']
+            print(f"\n要素処理統計:")
+            print(f"  処理した要素数: {elem['count']}")
+            print(f"  合計時間: {elem['total_time']:.3f}秒")
+            print(f"  平均時間: {elem['average_time']:.4f}秒/要素")
+            print(f"  最小時間: {elem['min_time']:.4f}秒")
+            print(f"  最大時間: {elem['max_time']:.4f}秒")
+        
+        print(f"\n処理別統計:")
+        for operation, stats in summary.items():
+            if operation in ['total_time', 'elements']:
+                continue
+            print(f"  {operation}:")
+            print(f"    実行回数: {stats['count']}")
+            print(f"    合計時間: {stats['total']:.3f}秒")
+            print(f"    平均時間: {stats['average']:.4f}秒")
+            print(f"    最小時間: {stats['min']:.4f}秒")
+            print(f"    最大時間: {stats['max']:.4f}秒")
+        
+        print("=" * 60)
+        sys.stdout.flush()
+
+
 class WebScribe:
     """Webページの要素を取得して保存するクラス"""
     
-    def __init__(self, headless: bool = False, wait_time: int = 10, progress_callback=None):
+    def __init__(self, headless: bool = False, wait_time: int = 10, progress_callback=None, enable_timing: bool = True):
         """
         初期化
         
@@ -35,10 +132,13 @@ class WebScribe:
             headless: ヘッドレスモードで実行するかどうか
             wait_time: ページ読み込み待機時間（秒）
             progress_callback: 進捗コールバック関数（current, total, message）を受け取る
+            enable_timing: 時間計測を有効にするかどうか
         """
         self.wait_time = wait_time
         self.driver = None
         self.progress_callback = progress_callback
+        self.enable_timing = enable_timing
+        self.timing_stats = TimingStats() if enable_timing else None
         self._setup_driver(headless)
     
     def _setup_driver(self, headless: bool):
@@ -118,37 +218,79 @@ class WebScribe:
         Returns:
             要素情報の辞書
         """
+        element_start_time = time.time()
+        breakdown = {}
+        
         try:
+            # タグ名取得
+            t0 = time.time()
+            tag_name = element.tag_name
+            breakdown['tag_name'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('tag_name', breakdown['tag_name'])
+            
+            # テキスト取得
+            t0 = time.time()
+            text = element.text.strip() if element.text else ''
+            breakdown['text'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('text', breakdown['text'])
+            
+            # 表示状態チェック
+            t0 = time.time()
+            is_displayed = element.is_displayed()
+            breakdown['is_displayed'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('is_displayed', breakdown['is_displayed'])
+            
+            # 有効状態チェック
+            t0 = time.time()
+            is_enabled = element.is_enabled()
+            breakdown['is_enabled'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('is_enabled', breakdown['is_enabled'])
+            
             info = {
                 'index': index,
-                'tag_name': element.tag_name,
-                'text': element.text.strip() if element.text else '',
+                'tag_name': tag_name,
+                'text': text,
                 'attributes': {},
                 'location': {},
                 'size': {},
-                'is_displayed': element.is_displayed(),
-                'is_enabled': element.is_enabled(),
+                'is_displayed': is_displayed,
+                'is_enabled': is_enabled,
                 'children_count': 0,
             }
             
             # XPathとCSSセレクタの取得は時間がかかるため、オプション化
             if include_xpath:
+                t0 = time.time()
                 try:
                     info['xpath'] = self._get_xpath(element)
                 except Exception:
                     info['xpath'] = ''
+                breakdown['xpath'] = time.time() - t0
+                if self.timing_stats:
+                    self.timing_stats.record('xpath', breakdown['xpath'])
             else:
                 info['xpath'] = ''
+                breakdown['xpath'] = 0
             
             if include_css_selector:
+                t0 = time.time()
                 try:
                     info['css_selector'] = self._get_css_selector(element)
                 except Exception:
                     info['css_selector'] = ''
+                breakdown['css_selector'] = time.time() - t0
+                if self.timing_stats:
+                    self.timing_stats.record('css_selector', breakdown['css_selector'])
             else:
                 info['css_selector'] = ''
+                breakdown['css_selector'] = 0
             
             # 属性を取得
+            t0 = time.time()
             try:
                 attributes = self.driver.execute_script(
                     'var items = {}; '
@@ -161,20 +303,35 @@ class WebScribe:
                 info['attributes'] = attributes
             except Exception as e:
                 print(f"属性の取得に失敗しました: {e}")
+            breakdown['attributes'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('attributes', breakdown['attributes'])
             
             # 位置情報を取得
+            t0 = time.time()
             try:
                 location = element.location
                 info['location'] = {'x': location['x'], 'y': location['y']}
             except Exception:
                 pass
+            breakdown['location'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('location', breakdown['location'])
             
             # サイズ情報を取得
+            t0 = time.time()
             try:
                 size = element.size
                 info['size'] = {'width': size['width'], 'height': size['height']}
             except Exception:
                 pass
+            breakdown['size'] = time.time() - t0
+            if self.timing_stats:
+                self.timing_stats.record('size', breakdown['size'])
+            
+            total_time = time.time() - element_start_time
+            if self.timing_stats:
+                self.timing_stats.record_element(index, tag_name, total_time, breakdown)
             
             return info
         except Exception as e:
@@ -277,6 +434,8 @@ class WebScribe:
         index = element_count[0]
         
         try:
+            # 親要素の検索時間を計測
+            t0 = time.time()
             if parent is None:
                 # body要素から開始
                 try:
@@ -289,6 +448,9 @@ class WebScribe:
                     elements = parent.find_elements(By.XPATH, "./*")
                 except Exception:
                     elements = []
+            find_time = time.time() - t0
+            if self.timing_stats and find_time > 0:
+                self.timing_stats.record('find_elements', find_time)
             
             for element in elements:
                 # 要素数制限チェック
@@ -296,8 +458,15 @@ class WebScribe:
                     break
                 
                 try:
+                    # 表示チェック時間を計測
+                    t0 = time.time()
+                    is_displayed = element.is_displayed()
+                    display_check_time = time.time() - t0
+                    if self.timing_stats:
+                        self.timing_stats.record('display_check', display_check_time)
+                    
                     # 表示されている要素のみを収集
-                    if element.is_displayed():
+                    if is_displayed:
                         # 進捗表示（コールバックがある場合は毎回、ない場合は100要素ごと）
                         if self.progress_callback:
                             # コールバックがある場合は、10要素ごとに更新（頻繁すぎると重くなるため）
@@ -320,6 +489,7 @@ class WebScribe:
                         element_count[0] += 1
                         
                         # 子要素を再帰的に収集
+                        t0 = time.time()
                         try:
                             children = self._collect_all_elements(
                                 element,
@@ -335,6 +505,9 @@ class WebScribe:
                         except Exception as e:
                             element_info['children'] = []
                             element_info['children_count'] = 0
+                        children_time = time.time() - t0
+                        if self.timing_stats:
+                            self.timing_stats.record('collect_children', children_time)
                         
                         elements_data.append(element_info)
                 except Exception as e:
@@ -659,6 +832,8 @@ class WebScribe:
         
         # 要素収集の開始時刻を記録
         start_time = time.time()
+        if self.timing_stats:
+            self.timing_stats.start_total()
         
         # 要素収集（XPathとCSSセレクタの取得は時間がかかるため、大量の要素がある場合は無効化を推奨）
         # TimeTreeのような複雑なページでは、XPath/CSSセレクタの取得を無効化すると大幅に高速化
@@ -670,6 +845,8 @@ class WebScribe:
         )
         
         elapsed_time = time.time() - start_time
+        if self.timing_stats:
+            self.timing_stats.end_total()
         
         result = {
             'page_info': page_info,
@@ -679,6 +856,11 @@ class WebScribe:
         
         print(f"\n合計 {len(elements)} 個の要素を収集しました（処理時間: {elapsed_time:.2f}秒）")
         sys.stdout.flush()
+        
+        # 時間統計を出力
+        if self.timing_stats:
+            self.timing_stats.print_summary()
+        
         return result
     
     def save_to_json(self, data: Dict[str, Any], output_path: str):
@@ -697,6 +879,402 @@ class WebScribe:
         
         print(f"データを保存しました: {output_path}")
         sys.stdout.flush()
+    
+    def save_to_html(self, data: Dict[str, Any], output_path: str):
+        """
+        データをHTMLファイルに保存（ブラウザで表示可能）
+        
+        Args:
+            data: 保存するデータ
+            output_path: 出力ファイルパス
+        """
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        page_info = data.get('page_info', {})
+        elements = data.get('elements', [])
+        total_elements = data.get('total_elements', len(elements))
+        
+        html_content = self._generate_html(data, page_info, elements, total_elements)
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"HTMLデータを保存しました: {output_path}")
+        sys.stdout.flush()
+    
+    def _generate_html(self, data: Dict[str, Any], page_info: Dict[str, Any], 
+                       elements: List[Dict[str, Any]], total_elements: int) -> str:
+        """HTMLコンテンツを生成"""
+        url = page_info.get('url', 'Unknown')
+        title = page_info.get('title', 'Unknown')
+        timestamp = page_info.get('timestamp', '')
+        viewport = page_info.get('viewport_size', {})
+        
+        html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebScribe - {title}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+        }}
+        .header h1 {{
+            font-size: 24px;
+            margin-bottom: 10px;
+        }}
+        .header-info {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+            font-size: 14px;
+        }}
+        .header-info-item {{
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 4px;
+        }}
+        .header-info-label {{
+            font-weight: bold;
+            margin-bottom: 5px;
+        }}
+        .content {{
+            padding: 20px;
+        }}
+        .element {{
+            margin: 10px 0;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #fafafa;
+        }}
+        .element-header {{
+            padding: 12px 15px;
+            background: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #e0e0e0;
+            user-select: none;
+        }}
+        .element-header:hover {{
+            background: #f0f0f0;
+        }}
+        .element-header.active {{
+            background: #e3f2fd;
+        }}
+        .element-title {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+        }}
+        .element-tag {{
+            background: #667eea;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }}
+        .element-index {{
+            color: #666;
+            font-size: 12px;
+        }}
+        .element-toggle {{
+            color: #666;
+            font-size: 18px;
+            transition: transform 0.2s;
+        }}
+        .element-toggle.expanded {{
+            transform: rotate(90deg);
+        }}
+        .element-details {{
+            display: none;
+            padding: 15px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+        }}
+        .element-details.show {{
+            display: block;
+        }}
+        .detail-row {{
+            margin: 8px 0;
+            padding: 8px;
+            background: #f9f9f9;
+            border-left: 3px solid #667eea;
+        }}
+        .detail-label {{
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }}
+        .detail-value {{
+            color: #666;
+            word-break: break-word;
+        }}
+        .detail-value pre {{
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            margin-top: 5px;
+        }}
+        .children-container {{
+            margin-left: 20px;
+            margin-top: 10px;
+            border-left: 2px solid #ddd;
+            padding-left: 15px;
+        }}
+        .stats {{
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            text-align: center;
+        }}
+        .stats-number {{
+            font-size: 32px;
+            font-weight: bold;
+            color: #2e7d32;
+        }}
+        .empty {{
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>WebScribe - ページ要素一覧</h1>
+            <div class="header-info">
+                <div class="header-info-item">
+                    <div class="header-info-label">ページタイトル</div>
+                    <div>{self._escape_html(title)}</div>
+                </div>
+                <div class="header-info-item">
+                    <div class="header-info-label">URL</div>
+                    <div><a href="{self._escape_html(url)}" target="_blank" style="color: white; text-decoration: underline;">{self._escape_html(url)}</a></div>
+                </div>
+                <div class="header-info-item">
+                    <div class="header-info-label">取得日時</div>
+                    <div>{self._escape_html(timestamp)}</div>
+                </div>
+                <div class="header-info-item">
+                    <div class="header-info-label">ビューポートサイズ</div>
+                    <div>{viewport.get('width', 'N/A')} × {viewport.get('height', 'N/A')}</div>
+                </div>
+            </div>
+        </div>
+        <div class="content">
+            <div class="stats">
+                <div class="stats-number">{total_elements}</div>
+                <div>個の要素を取得</div>
+            </div>
+"""
+        
+        if elements:
+            html += self._generate_elements_html(elements, depth=0)
+        else:
+            html += '<div class="empty">要素がありません</div>'
+        
+        html += """
+        </div>
+    </div>
+    <script>
+        document.querySelectorAll('.element-header').forEach(header => {
+            header.addEventListener('click', function() {
+                const details = this.nextElementSibling;
+                const toggle = this.querySelector('.element-toggle');
+                const isExpanded = details.classList.contains('show');
+                
+                if (isExpanded) {
+                    details.classList.remove('show');
+                    toggle.classList.remove('expanded');
+                    this.classList.remove('active');
+                } else {
+                    details.classList.add('show');
+                    toggle.classList.add('expanded');
+                    this.classList.add('active');
+                }
+            });
+        });
+    </script>
+</body>
+</html>"""
+        
+        return html
+    
+    def _generate_elements_html(self, elements: List[Dict[str, Any]], depth: int = 0) -> str:
+        """要素のHTMLを再帰的に生成"""
+        if depth > 10:  # 深度制限
+            return ""
+        
+        html = ""
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            
+            tag_name = element.get('tag_name', '')
+            index = element.get('index', 0)
+            text = element.get('text', '')
+            attributes = element.get('attributes', {})
+            location = element.get('location', {})
+            size = element.get('size', {})
+            is_displayed = element.get('is_displayed', False)
+            is_enabled = element.get('is_enabled', False)
+            children = element.get('children', [])
+            children_count = element.get('children_count', 0)
+            xpath = element.get('xpath', '')
+            css_selector = element.get('css_selector', '')
+            
+            # テキストのプレビュー（長すぎる場合は切り詰め）
+            text_preview = text[:100] if len(text) > 100 else text
+            if len(text) > 100:
+                text_preview += '...'
+            
+            html += f"""
+            <div class="element">
+                <div class="element-header">
+                    <div class="element-title">
+                        <span class="element-tag">{self._escape_html(tag_name)}</span>
+                        <span class="element-index">[{index}]</span>
+                        {f'<span style="color: #666; font-size: 12px;">{self._escape_html(text_preview)}</span>' if text_preview else ''}
+                    </div>
+                    <span class="element-toggle">▶</span>
+                </div>
+                <div class="element-details">
+                    <div class="detail-row">
+                        <div class="detail-label">タグ名</div>
+                        <div class="detail-value">{self._escape_html(tag_name)}</div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">インデックス</div>
+                        <div class="detail-value">{index}</div>
+                    </div>
+"""
+            
+            if text:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">テキスト</div>
+                        <div class="detail-value"><pre>{self._escape_html(text)}</pre></div>
+                    </div>
+"""
+            
+            if attributes:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">属性</div>
+                        <div class="detail-value"><pre>{self._escape_html(json.dumps(attributes, ensure_ascii=False, indent=2))}</pre></div>
+                    </div>
+"""
+            
+            if location:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">位置</div>
+                        <div class="detail-value">x: {location.get('x', 'N/A')}, y: {location.get('y', 'N/A')}</div>
+                    </div>
+"""
+            
+            if size:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">サイズ</div>
+                        <div class="detail-value">width: {size.get('width', 'N/A')}, height: {size.get('height', 'N/A')}</div>
+                    </div>
+"""
+            
+            html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">表示状態</div>
+                        <div class="detail-value">表示: {'はい' if is_displayed else 'いいえ'}, 有効: {'はい' if is_enabled else 'いいえ'}</div>
+                    </div>
+"""
+            
+            if xpath:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">XPath</div>
+                        <div class="detail-value"><pre>{self._escape_html(xpath)}</pre></div>
+                    </div>
+"""
+            
+            if css_selector:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">CSSセレクタ</div>
+                        <div class="detail-value"><pre>{self._escape_html(css_selector)}</pre></div>
+                    </div>
+"""
+            
+            if children_count > 0:
+                html += f"""
+                    <div class="detail-row">
+                        <div class="detail-label">子要素数</div>
+                        <div class="detail-value">{children_count}</div>
+                    </div>
+"""
+            
+            if children:
+                html += """
+                    <div class="detail-row">
+                        <div class="detail-label">子要素</div>
+                        <div class="detail-value">
+                            <div class="children-container">
+"""
+                html += self._generate_elements_html(children, depth + 1)
+                html += """
+                            </div>
+                        </div>
+                    </div>
+"""
+            
+            html += """
+                </div>
+            </div>
+"""
+        
+        return html
+    
+    def _escape_html(self, text: str) -> str:
+        """HTMLエスケープ"""
+        if not isinstance(text, str):
+            text = str(text)
+        return (text
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('"', '&quot;')
+                .replace("'", '&#39;'))
     
     def close(self):
         """ブラウザを閉じる"""
@@ -733,8 +1311,12 @@ def main():
         with WebScribe(headless=args.headless, wait_time=args.wait) as scribe:
             data = scribe.scrape_page(args.url)
             scribe.save_to_json(data, args.output)
+            # HTMLファイルも保存
+            html_output = str(Path(args.output).with_suffix('.html'))
+            scribe.save_to_html(data, html_output)
             print("\n完了しました！")
-            print(f"出力ファイル: {args.output}")
+            print(f"出力ファイル (JSON): {args.output}")
+            print(f"出力ファイル (HTML): {html_output}")
             sys.stdout.flush()
     except KeyboardInterrupt:
         print("\n中断されました")

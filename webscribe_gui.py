@@ -7,12 +7,14 @@ import threading
 import io
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
+from typing import Dict, Any
 from tkinter import (
     Tk, Label, Entry, Button, Checkbutton, BooleanVar,
     StringVar, Text, Scrollbar, messagebox, filedialog,
     ttk, Frame
 )
 from tkinter.scrolledtext import ScrolledText
+from tkinter.ttk import Combobox, Treeview
 
 from webscribe import WebScribe
 
@@ -23,7 +25,7 @@ class WebScribeGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("WebScribe - Webページ要素取得ツール")
-        self.root.geometry("700x600")
+        self.root.geometry("1200x700")
         self.root.resizable(True, True)
         
         # 変数の初期化
@@ -42,16 +44,25 @@ class WebScribeGUI:
         self.current_element_count = 0
         self.max_elements = 10000
         
-        # 設定ファイルのパス
-        self.settings_file = Path(__file__).parent / "webscribe_settings.json"
+        # 設定ファイルのパス（複数設定対応）
+        self.settings_dir = Path(__file__).parent / "settings"
+        self.settings_dir.mkdir(exist_ok=True)
+        self.settings_file = self.settings_dir / "webscribe_settings.json"
+        self.current_settings_profile = None
+        
+        # 取得した要素データ
+        self.current_elements_data = None
         
         self._create_widgets()
         
-        # 起動時に設定を読み込む
-        self.load_settings()
+        # 保存された設定リストを読み込み
+        self.load_settings_list()
         
     def _create_widgets(self):
         """ウィジェットを作成"""
+        # ttkウィジェットのスタイルを設定
+        style = ttk.Style()
+        style.configure('Treeview', font=('Consolas', 9))
         # メインフレーム
         main_frame = Frame(self.root, padx=10, pady=10)
         main_frame.pack(fill='both', expand=True)
@@ -60,7 +71,25 @@ class WebScribeGUI:
         url_frame = Frame(main_frame)
         url_frame.pack(fill='x', pady=(0, 10))
         
-        Label(url_frame, text="URL:", font=('Arial', 10, 'bold')).pack(anchor='w')
+        url_label_frame = Frame(url_frame)
+        url_label_frame.pack(fill='x', pady=(0, 5))
+        
+        Label(url_label_frame, text="URL:", font=('Arial', 10, 'bold')).pack(side='left')
+        
+        # 保存された設定を選択するCombobox
+        settings_select_frame = Frame(url_label_frame)
+        settings_select_frame.pack(side='right')
+        
+        Label(settings_select_frame, text="保存された設定:", font=('Arial', 9)).pack(side='left', padx=(10, 5))
+        self.settings_combo = Combobox(
+            settings_select_frame,
+            width=25,
+            state='readonly',
+            font=('Arial', 9)
+        )
+        self.settings_combo.pack(side='left')
+        self.settings_combo.bind('<<ComboboxSelected>>', self.on_settings_selected)
+        
         url_entry = Entry(url_frame, textvariable=self.url_var, font=('Arial', 10))
         url_entry.pack(fill='x', pady=(5, 0))
         url_entry.bind('<Return>', lambda e: self.start_scraping())
@@ -200,8 +229,8 @@ class WebScribeGUI:
         
         load_settings_button = Button(
             settings_frame,
-            text="設定を読み込み",
-            command=lambda: self.load_settings(show_message=True),
+            text="選択した設定を読み込み",
+            command=self.load_selected_settings,
             font=('Arial', 9),
             bg='#FF9800',
             fg='white',
@@ -248,27 +277,31 @@ class WebScribeGUI:
         )
         self.element_count_label.pack(side='right')
         
-        # ログ表示エリア
-        log_label_frame = Frame(main_frame)
+        # ログと要素表示エリア（左右分割）
+        bottom_frame = Frame(main_frame)
+        bottom_frame.pack(fill='both', expand=True)
+        
+        # 左側: ログ表示エリア
+        log_container = Frame(bottom_frame)
+        log_container.pack(side='left', fill='both', expand=True, padx=(0, 5))
+        
+        log_label_frame = Frame(log_container)
         log_label_frame.pack(fill='x', pady=(0, 5))
         
         Label(log_label_frame, text="ログ:", font=('Arial', 10, 'bold')).pack(side='left')
         
-        clear_button = Button(
+        clear_log_button = Button(
             log_label_frame,
             text="クリア",
             command=self.clear_log,
             font=('Arial', 8),
             width=8
         )
-        clear_button.pack(side='right')
+        clear_log_button.pack(side='right')
         
         # ログテキストエリア（スクロール可能）
-        log_frame = Frame(main_frame)
-        log_frame.pack(fill='both', expand=True)
-        
         self.log_text = ScrolledText(
-            log_frame,
+            log_container,
             wrap='word',
             font=('Consolas', 9),
             bg='#f5f5f5',
@@ -276,10 +309,79 @@ class WebScribeGUI:
         )
         self.log_text.pack(fill='both', expand=True)
         
+        # 右側: 取得した要素表示エリア
+        elements_container = Frame(bottom_frame)
+        elements_container.pack(side='right', fill='both', expand=True, padx=(5, 0))
+        
+        elements_label_frame = Frame(elements_container)
+        elements_label_frame.pack(fill='x', pady=(0, 5))
+        
+        Label(elements_label_frame, text="取得した要素:", font=('Arial', 10, 'bold')).pack(side='left')
+        
+        elements_button_frame = Frame(elements_label_frame)
+        elements_button_frame.pack(side='right')
+        
+        open_json_button = Button(
+            elements_button_frame,
+            text="JSONファイルを開く",
+            command=self.open_json_file,
+            font=('Arial', 8),
+            width=12
+        )
+        open_json_button.pack(side='right', padx=(0, 5))
+        
+        clear_elements_button = Button(
+            elements_button_frame,
+            text="クリア",
+            command=self.clear_elements,
+            font=('Arial', 8),
+            width=8
+        )
+        clear_elements_button.pack(side='right')
+        
+        # 要素表示用のTreeview
+        elements_tree_frame = Frame(elements_container)
+        elements_tree_frame.pack(fill='both', expand=True)
+        
+        # スクロールバー
+        elements_scrollbar_y = Scrollbar(elements_tree_frame, orient='vertical')
+        elements_scrollbar_y.pack(side='right', fill='y')
+        
+        elements_scrollbar_x = Scrollbar(elements_tree_frame, orient='horizontal')
+        elements_scrollbar_x.pack(side='bottom', fill='x')
+        
+        # Treeview
+        self.elements_tree = Treeview(
+            elements_tree_frame,
+            columns=('tag', 'text_preview', 'children'),
+            show='tree headings',
+            yscrollcommand=elements_scrollbar_y.set,
+            xscrollcommand=elements_scrollbar_x.set
+        )
+        self.elements_tree.pack(side='left', fill='both', expand=True)
+        
+        elements_scrollbar_y.config(command=self.elements_tree.yview)
+        elements_scrollbar_x.config(command=self.elements_tree.xview)
+        
+        # カラムの設定
+        self.elements_tree.heading('#0', text='要素', anchor='w')
+        self.elements_tree.heading('tag', text='タグ', anchor='w')
+        self.elements_tree.heading('text_preview', text='テキスト（プレビュー）', anchor='w')
+        self.elements_tree.heading('children', text='子要素数', anchor='w')
+        
+        self.elements_tree.column('#0', width=150)
+        self.elements_tree.column('tag', width=100)
+        self.elements_tree.column('text_preview', width=300)
+        self.elements_tree.column('children', width=80)
+        
+        # 要素をクリックしたときの詳細表示
+        self.elements_tree.bind('<Double-1>', self.on_element_selected)
+        
         # 初期メッセージ
         self.log("WebScribe GUIを起動しました。")
-        if self.settings_file.exists():
-            self.log("前回の設定を読み込みました。")
+        settings_files = list(self.settings_dir.glob("*.json"))
+        if settings_files:
+            self.log(f"{len(settings_files)}個の設定プロファイルが見つかりました。")
         self.log("URLを入力して「実行」ボタンをクリックしてください。\n")
         
     def _toggle_login_fields(self):
@@ -321,6 +423,163 @@ class WebScribeGUI:
         self.log_text.config(state='normal')
         self.log_text.delete(1.0, 'end')
         self.log_text.config(state='disabled')
+    
+    def clear_elements(self):
+        """要素表示をクリア"""
+        for item in self.elements_tree.get_children():
+            self.elements_tree.delete(item)
+        self.current_elements_data = None
+    
+    def display_elements(self, elements_data: Dict[str, Any]):
+        """取得した要素を表示
+        
+        Args:
+            elements_data: scrape_page()で取得したデータ
+        """
+        try:
+            self.current_elements_data = elements_data
+            
+            # 既存の要素をクリア
+            self.clear_elements()
+            
+            if not elements_data:
+                self.log("警告: 要素データが空です")
+                return
+            
+            if 'elements' not in elements_data:
+                self.log("警告: 要素データに'elements'キーがありません")
+                return
+            
+            elements = elements_data.get('elements', [])
+            page_info = elements_data.get('page_info', {})
+            
+            if not elements:
+                self.log("警告: 要素が0個です")
+                return
+            
+            # ページ情報をルートアイテムとして追加
+            root_text = f"ページ: {page_info.get('title', 'Unknown')}"
+            root_item = self.elements_tree.insert(
+                '', 'end',
+                text=root_text,
+                values=('', f"URL: {page_info.get('url', '')}", f"合計: {len(elements)}要素"),
+                open=True
+            )
+            
+            # 要素を再帰的に追加
+            for element in elements:
+                try:
+                    self._add_element_to_tree(root_item, element)
+                except Exception as e:
+                    self.log(f"要素の表示エラー: {e}")
+                    continue
+            
+            self.log(f"取得した {len(elements)} 個の要素を表示しました")
+        except Exception as e:
+            self.log(f"要素表示のエラー: {e}")
+            import traceback
+            self.log(traceback.format_exc())
+    
+    def _add_element_to_tree(self, parent_item, element: Dict[str, Any], depth: int = 0):
+        """要素をTreeviewに追加（再帰的）
+        
+        Args:
+            parent_item: 親アイテム
+            element: 要素データ
+            depth: 現在の深度
+        """
+        try:
+            if depth > 10:  # 深度制限
+                return
+            
+            if not isinstance(element, dict):
+                return
+            
+            tag_name = element.get('tag_name', '')
+            text_content = element.get('text', '')
+            if not isinstance(text_content, str):
+                text_content = str(text_content) if text_content else ''
+            text_preview = text_content[:50]  # 最初の50文字
+            if len(text_content) > 50:
+                text_preview += '...'
+            children_count = element.get('children_count', 0)
+            
+            # アイテムテキスト（インデックスとタグ名）
+            item_text = f"[{element.get('index', 0)}] {tag_name}"
+            
+            item = self.elements_tree.insert(
+                parent_item,
+                'end',
+                text=item_text,
+                values=(tag_name, text_preview, children_count),
+                tags=(tag_name,)
+            )
+            
+            # 子要素を追加
+            children = element.get('children', [])
+            if not isinstance(children, list):
+                children = []
+            
+            for child in children:
+                if isinstance(child, dict):
+                    self._add_element_to_tree(item, child, depth + 1)
+        except Exception as e:
+            # エラーが発生しても処理を続行
+            pass
+    
+    def on_element_selected(self, event):
+        """要素が選択されたときの詳細表示"""
+        selection = self.elements_tree.selection()
+        if not selection:
+            return
+        
+        item = selection[0]
+        item_text = self.elements_tree.item(item, 'text')
+        
+        # 詳細情報を表示（簡易版）
+        messagebox.showinfo("要素情報", f"選択された要素: {item_text}")
+    
+    def open_json_file(self):
+        """既存のJSONファイルを開いて要素を表示"""
+        filename = filedialog.askopenfilename(
+            title="JSONファイルを開く",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        if not filename:
+            return
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # JSONデータが正しい形式か確認
+            if not isinstance(data, dict):
+                messagebox.showerror("エラー", "JSONファイルの形式が正しくありません。")
+                return
+            
+            if 'elements' not in data:
+                messagebox.showerror("エラー", "このJSONファイルには要素データが含まれていません。")
+                return
+            
+            # 要素を表示
+            self.display_elements(data)
+            self.log(f"JSONファイルを読み込みました: {filename}")
+            
+            # ページ情報をログに表示
+            page_info = data.get('page_info', {})
+            if page_info:
+                self.log(f"  ページ: {page_info.get('title', 'Unknown')}")
+                self.log(f"  URL: {page_info.get('url', 'Unknown')}")
+                if 'timestamp' in page_info:
+                    self.log(f"  取得日時: {page_info['timestamp']}")
+            
+        except json.JSONDecodeError as e:
+            messagebox.showerror("エラー", f"JSONファイルの解析に失敗しました:\n{e}")
+            self.log(f"JSONファイルの読み込みエラー: {e}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"ファイルの読み込みに失敗しました:\n{e}")
+            self.log(f"ファイル読み込みエラー: {e}")
         
     def browse_output_file(self):
         """出力ファイルの保存先を選択"""
@@ -333,7 +592,22 @@ class WebScribeGUI:
             self.output_var.set(filename)
     
     def save_settings(self):
-        """現在の設定をファイルに保存"""
+        """現在の設定をファイルに保存（複数プロファイル対応）"""
+        # プロファイル名を入力
+        profile_name = messagebox.askstring(
+            "設定を保存",
+            "プロファイル名を入力してください:",
+            initialvalue=self.url_var.get().replace('https://', '').replace('http://', '').split('/')[0][:30]
+        )
+        
+        if not profile_name:
+            return  # キャンセルされた場合
+        
+        profile_name = profile_name.strip()
+        if not profile_name:
+            messagebox.showerror("エラー", "プロファイル名を入力してください。")
+            return
+        
         try:
             settings = {
                 'url': self.url_var.get(),
@@ -349,28 +623,89 @@ class WebScribeGUI:
                 'submit_selector': self.submit_selector_var.get(),
             }
             
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
+            # プロファイルファイル名（安全なファイル名に変換）
+            safe_name = "".join(c for c in profile_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_name = safe_name.replace(' ', '_')
+            profile_file = self.settings_dir / f"{safe_name}.json"
+            
+            with open(profile_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, ensure_ascii=False, indent=2)
             
-            messagebox.showinfo("成功", f"設定を保存しました。\n{self.settings_file}")
-            self.log(f"設定を保存しました: {self.settings_file}")
+            messagebox.showinfo("成功", f"設定を保存しました。\nプロファイル: {profile_name}\nファイル: {profile_file}")
+            self.log(f"設定を保存しました: {profile_name}")
+            
+            # 設定リストを更新
+            self.load_settings_list()
         except Exception as e:
             messagebox.showerror("エラー", f"設定の保存に失敗しました:\n{e}")
             self.log(f"設定の保存エラー: {e}")
     
-    def load_settings(self, show_message: bool = False):
-        """保存された設定をファイルから読み込み
+    def load_settings_list(self):
+        """保存された設定ファイルのリストを取得してComboboxに設定"""
+        try:
+            profile_names = []
+            
+            # settings/ディレクトリ内のJSONファイルを読み込む
+            settings_files = list(self.settings_dir.glob("*.json"))
+            
+            # ルートディレクトリのwebscribe_settings.jsonも読み込む（後方互換性のため）
+            root_settings_file = Path(__file__).parent / "webscribe_settings.json"
+            if root_settings_file.exists():
+                settings_files.append(root_settings_file)
+            
+            for settings_file in sorted(settings_files):
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                    url = settings.get('url', '')
+                    profile_name = settings_file.stem
+                    if url:
+                        profile_names.append(f"{profile_name} ({url})")
+                    else:
+                        profile_names.append(profile_name)
+                except Exception as e:
+                    self.log(f"設定ファイルの読み込みエラー ({settings_file}): {e}")
+                    continue
+            
+            self.settings_combo['values'] = profile_names
+            if profile_names:
+                self.settings_combo.current(0)
+        except Exception as e:
+            self.log(f"設定リストの読み込みエラー: {e}")
+    
+    def on_settings_selected(self, event):
+        """設定が選択されたときの処理（自動読み込み）"""
+        selected = self.settings_combo.get()
+        if not selected:
+            return
+        
+        # プロファイル名を抽出（URL部分を除去）
+        profile_name = selected.split(' (')[0]
+        
+        # まずsettings/ディレクトリ内を探す
+        profile_file = self.settings_dir / f"{profile_name}.json"
+        
+        # 見つからない場合はルートディレクトリを探す
+        if not profile_file.exists():
+            profile_file = Path(__file__).parent / f"{profile_name}.json"
+        
+        if profile_file.exists():
+            self.load_settings_from_file(profile_file, show_message=False)
+    
+    def load_settings_from_file(self, settings_file: Path, show_message: bool = False):
+        """設定ファイルから読み込み
         
         Args:
-            show_message: メッセージを表示するかどうか（デフォルト: False）
+            settings_file: 設定ファイルのパス
+            show_message: メッセージを表示するかどうか
         """
         try:
-            if not self.settings_file.exists():
+            if not settings_file.exists():
                 if show_message:
                     messagebox.showinfo("情報", "設定ファイルが見つかりません。")
-                return  # 設定ファイルが存在しない場合は何もしない
+                return
             
-            with open(self.settings_file, 'r', encoding='utf-8') as f:
+            with open(settings_file, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
             
             # 設定を復元
@@ -402,11 +737,34 @@ class WebScribeGUI:
             
             if show_message:
                 messagebox.showinfo("成功", "設定を読み込みました。")
-            self.log("設定を読み込みました")
+            self.log(f"設定を読み込みました: {settings_file.stem}")
         except Exception as e:
             if show_message:
                 messagebox.showerror("エラー", f"設定の読み込みに失敗しました:\n{e}")
-            # 起動時の自動読み込み時はエラーをログに記録しない
+    
+    def load_selected_settings(self):
+        """Comboboxで選択された設定を読み込み"""
+        selected = self.settings_combo.get()
+        if not selected:
+            messagebox.showwarning("警告", "設定を選択してください。")
+            return
+        
+        # プロファイル名を抽出（URL部分を除去）
+        profile_name = selected.split(' (')[0]
+        profile_file = self.settings_dir / f"{profile_name}.json"
+        
+        if not profile_file.exists():
+            messagebox.showerror("エラー", f"設定ファイルが見つかりません: {profile_file}")
+            return
+        
+        self.load_settings_from_file(profile_file, show_message=True)
+    
+    def load_settings(self, show_message: bool = False):
+        """保存された設定を読み込み（後方互換性のため）"""
+        # 最初の設定ファイルがあれば読み込む
+        settings_files = sorted(list(self.settings_dir.glob("*.json")))
+        if settings_files:
+            self.load_settings_from_file(settings_files[0], show_message)
             
     def validate_inputs(self) -> bool:
         """入力値の検証"""
@@ -564,6 +922,9 @@ class WebScribeGUI:
             # 結果を表示
             self.log(f"ページタイトル: {data['page_info']['title']}")
             
+            # 取得した要素を表示エリアに表示
+            self.root.after(0, lambda: self.display_elements(data))
+            
             # ファイルに保存
             self.log(f"データを保存中: {output_path}")
             with redirect_stdout(log_stream), redirect_stderr(log_stream):
@@ -572,11 +933,22 @@ class WebScribeGUI:
             
             if not self.is_running:
                 return
+            
+            # HTMLファイルも保存
+            html_output_path = str(Path(output_path).with_suffix('.html'))
+            self.log(f"HTMLデータを保存中: {html_output_path}")
+            with redirect_stdout(log_stream), redirect_stderr(log_stream):
+                scribe.save_to_html(data, html_output_path)
+            log_stream.flush()
+            
+            if not self.is_running:
+                return
                 
             # 完了メッセージ
             self.log("\n" + "=" * 50)
             self.log("完了しました！")
-            self.log(f"出力ファイル: {output_path}")
+            self.log(f"出力ファイル (JSON): {output_path}")
+            self.log(f"出力ファイル (HTML): {html_output_path}")
             self.log("=" * 50)
             
             # 成功ダイアログ
@@ -625,9 +997,20 @@ class WebScribeGUI:
 
 def main():
     """メイン関数"""
-    root = Tk()
-    app = WebScribeGUI(root)
-    root.mainloop()
+    try:
+        root = Tk()
+        app = WebScribeGUI(root)
+        # ウィンドウを前面に表示
+        root.lift()
+        root.attributes('-topmost', True)
+        root.after_idle(root.attributes, '-topmost', False)
+        root.focus_force()
+        print("GUIウィンドウを起動しました...")
+        root.mainloop()
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == '__main__':
