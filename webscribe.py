@@ -42,11 +42,22 @@ class WebScribe:
         """Seleniumドライバーをセットアップ"""
         options = webdriver.ChromeOptions()
         if headless:
-            options.add_argument('--headless')
+            # 新しいヘッドレスモードを使用（Chrome 109+）
+            options.add_argument('--headless=new')
+        
+        # 自動化検出を回避するための設定
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # より完全なユーザーエージェント（実際のChromeブラウザに近いもの）
+        user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        options.add_argument(f'user-agent={user_agent}')
+        
+        # ウィンドウサイズを設定（モバイルサイト対策）
+        options.add_argument('--window-size=1920,1080')
         
         try:
             sys.stdout.flush()
@@ -58,6 +69,20 @@ class WebScribe:
                 self.driver = webdriver.Chrome(service=service, options=options)
             else:
                 self.driver = webdriver.Chrome(options=options)
+            
+            # 自動化検出を回避するためのJavaScript実行
+            try:
+                self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                    "userAgent": user_agent
+                })
+            except Exception:
+                # CDPコマンドが使えない場合はスキップ
+                pass
+            
+            try:
+                self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            except Exception:
+                pass
             
             self.driver.implicitly_wait(self.wait_time)
             print("ChromeDriverの初期化が完了しました")
@@ -237,13 +262,52 @@ class WebScribe:
         
         return elements_data
     
-    def scrape_page(self, url: str, wait_for_load: bool = True) -> Dict[str, Any]:
+    def _wait_for_page_load(self, additional_wait: int = 5):
+        """ページとJavaScriptの読み込み完了を待機"""
+        # DOMContentLoadedを待つ
+        WebDriverWait(self.driver, self.wait_time).until(
+            lambda d: d.execute_script('return document.readyState') == 'complete'
+        )
+        
+        # JavaScriptの実行完了を待つ（複数回チェック）
+        for i in range(additional_wait):
+            time.sleep(1)
+            try:
+                # ページの変更がないことを確認
+                old_height = self.driver.execute_script('return document.body.scrollHeight')
+                time.sleep(0.5)
+                new_height = self.driver.execute_script('return document.body.scrollHeight')
+                if old_height == new_height:
+                    # さらに少し待機してJavaScriptの実行を確実にする
+                    time.sleep(1)
+                    break
+            except Exception:
+                pass
+        
+        # スクロールして遅延読み込みコンテンツを読み込む
+        try:
+            total_height = self.driver.execute_script('return document.body.scrollHeight')
+            viewport_height = self.driver.execute_script('return window.innerHeight')
+            
+            # 少しずつスクロール
+            for scroll in range(0, total_height, viewport_height):
+                self.driver.execute_script(f'window.scrollTo(0, {scroll});')
+                time.sleep(0.3)
+            
+            # トップに戻る
+            self.driver.execute_script('window.scrollTo(0, 0);')
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"スクロール処理中にエラー: {e}")
+    
+    def scrape_page(self, url: str, wait_for_load: bool = True, wait_javascript: bool = True) -> Dict[str, Any]:
         """
         Webページをスクレイピングして要素を取得
         
         Args:
             url: スクレイピングするURL
             wait_for_load: ページの読み込みを待つかどうか
+            wait_javascript: JavaScriptの実行完了を待つかどうか
             
         Returns:
             ページ情報と要素データを含む辞書
@@ -258,8 +322,18 @@ class WebScribe:
                 WebDriverWait(self.driver, self.wait_time).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
-                # 追加の読み込み時間
-                time.sleep(2)
+                print("ページの基本構造が読み込まれました")
+                sys.stdout.flush()
+                
+                if wait_javascript:
+                    print("JavaScriptの実行完了を待機中...")
+                    sys.stdout.flush()
+                    self._wait_for_page_load(additional_wait=5)
+                    print("JavaScriptの実行が完了しました")
+                    sys.stdout.flush()
+                else:
+                    # 最小限の待機
+                    time.sleep(2)
             except TimeoutException:
                 print("警告: ページの読み込みがタイムアウトしました")
                 sys.stdout.flush()
